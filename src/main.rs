@@ -1,8 +1,13 @@
 mod parser;
+use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 
+// Credit to Core Dumped YouTube channel
+// https://www.youtube.com/watch?v=0c8b7YfsBKs
+
 fn main() {
+    let mut variables: HashMap<char, f32> = HashMap::new();
     loop {
         print!(">> ");
         io::stdout().flush().unwrap();
@@ -17,6 +22,13 @@ fn main() {
         }
 
         let expr = parser::Expression::from_str(&input);
-        println!("{}", expr.to_string());
+        if let Some((var_name, lhs)) = expr.is_asign() {
+            let value = lhs.eval(&variables);
+            variables.insert(var_name, value);
+            continue;
+        }
+        let value = expr.eval(&variables);
+        println!("Value: {}", value);
+        //println!("{}", expr.to_string());
     }
 }

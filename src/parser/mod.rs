@@ -1,5 +1,5 @@
 use core::panic;
-use std::{fmt, vec};
+use std::{collections::HashMap, fmt, vec};
 // Credit to Core Dumped YouTube channel
 // https://www.youtube.com/watch?v=0c8b7YfsBKs
 
@@ -14,6 +14,7 @@ struct Lexer {
     tokens: Vec<Token>,
 }
 
+#[derive(Clone)]
 pub enum Expression {
     Atom(char),
     Operation(char, Vec<Expression>), // e.g., Operation('+', vec![Atom('a'), Atom('b')])
@@ -24,11 +25,11 @@ impl fmt::Display for Expression {
         match self {
             Expression::Atom(i) => write!(f, "{}", i),
             Expression::Operation(head, tail) => {
-                write!(f, "({}", head)?;
-                for s in tail {
-                    write!(f, " {}", s)?
+                write!(f, "({}", head)?;          // Write opening paren + operator
+                for s in tail {                   // Iterate through operands
+                    write!(f, " {}", s)?          // Write space + operand (recursive)
                 }
-                write!(f, ")")
+                write!(f, ")")                    // Write closing paren
             }
         }
     }
@@ -38,6 +39,55 @@ impl Expression {
     pub fn from_str(input_str: &str) -> Expression {
         let mut lexer = Lexer::new(input_str);
         parse_expression(&mut lexer, 0.0)
+    }
+    #[allow(unused)]
+    pub fn is_asign(&self) -> Option<(char, &Expression)> {
+        match self {
+            Expression::Atom(_) => return None,
+            Expression::Operation(c, operands) => {
+                if *c == '=' {
+                    let var_name = match operands.first().unwrap() {
+                        Expression::Atom(c) => {
+                            if *c >= 'a' && *c <= 'z' || *c >= 'A' && *c <= 'Z' {
+                                *c
+                            } else {
+                                panic!("Invalid variable name: {}", c);
+                            }
+                        }
+                        _ => unreachable!("Expected variable name on left side of assignment")
+                    };
+                    return Some((var_name, operands.last().unwrap()));
+                }
+                return None;
+            }
+        }
+    }
+    #[allow(unused)]
+    pub fn eval(&self, variables: &HashMap<char, f32>) -> f32 {
+        match self {
+            Expression::Atom(c) => {
+                match c {
+                    '0'..='9' => return c.to_digit(10).unwrap() as f32,
+                    'a'..='z' | 'A'..='Z' => {
+                        *variables.get(c).expect(&format!("Undefined variable: {}", c))
+                    },
+                    _ => unreachable!("Invalid atom: {}", c),
+                }
+            }
+            Expression::Operation(operator, operands) =>{
+                let lhs = operands.first().unwrap().eval(variables);
+                let rhs = operands.last().unwrap().eval(variables);
+                match operator {
+                    '+' => lhs + rhs,
+                    '-' => lhs - rhs,
+                    '*' => lhs * rhs,
+                    '/' => lhs / rhs,
+                    '^' => lhs.powf(rhs),
+                    '√' => lhs.powf(1.0/rhs),
+                    op => panic!("Unknown operator: {}", operator),
+                }
+            }
+        }
     }
 }
 
@@ -66,6 +116,7 @@ impl Lexer {
 
 fn infix_binding_power(op: char) -> (f32, f32) {
     match op {
+        '=' => (0.2, 0.1),
         '+' | '-' => (1.0, 1.1),
         '*' | '/' => (2.0, 2.1),
         '^' | '√' => (3.1, 3.0),
@@ -138,6 +189,7 @@ mod tests {
         assert_eq!(s.to_string(), "1");
     }
 
+    #[test]
     fn test_2() {
         let s = Expression::from_str("1 + 2 * 3");
         assert_eq!(s.to_string(), "(+ 1 (* 2 3))");
