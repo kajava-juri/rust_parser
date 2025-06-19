@@ -20,6 +20,13 @@ pub enum Expression {
     Operation(char, Vec<Expression>), // e.g., Operation('+', vec![Atom('a'), Atom('b')])
 }
 
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Assoc {
+    Left,
+    Right
+}
+
 impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -38,7 +45,7 @@ impl fmt::Display for Expression {
 impl Expression {
     pub fn from_str(input_str: &str) -> Expression {
         let mut lexer = Lexer::new(input_str);
-        parse_expression(&mut lexer, 0.0)
+        parse_expression(&mut lexer, 0)
     }
     #[allow(unused)]
     pub fn is_asign(&self) -> Option<(char, &Expression)> {
@@ -114,23 +121,29 @@ impl Lexer {
     }
 }
 
-fn infix_binding_power(op: char) -> (f32, f32) {
-    match op {
-        '=' => (0.2, 0.1),
-        '+' | '-' => (1.0, 1.1),
-        '*' | '/' => (2.0, 2.1),
-        '^' | '√' => (3.1, 3.0),
+fn infix_binding_power(op: char) -> (u8, u8) {
+    // get the precedence (order) and side association
+    let (prec, assoc) = match op {
+        '=' => (1, Assoc::Right),
+        '+' | '-' => (2, Assoc::Left),
+        '*' | '/' => (3, Assoc::Left),
+        '^' | '√' => (3, Assoc::Right),
         _ => panic!("Unknown operator: {:?}", op),
+    };
+
+    match assoc {
+        Assoc::Left => (prec, prec + 1),
+        Assoc::Right => (prec + 1, prec)
     }
 }
 
-fn parse_expression(lexer: &mut Lexer, min_bp: f32) -> Expression {
+fn parse_expression(lexer: &mut Lexer, min_bp: u8) -> Expression {
     // First token must be an atom
     let mut lhs = match lexer.next() {
         Token::Atom(c) => Expression::Atom(c),
         Token::Op('(') => {
             // ensure that the function returned because it encountered a ')' not EOF
-            let lhs = parse_expression(lexer, 0.0);
+            let lhs = parse_expression(lexer, 0);
             assert_eq!(lexer.next(), Token::Op(')'));
             lhs
         },
@@ -181,6 +194,7 @@ fn parse_expression(lexer: &mut Lexer, min_bp: f32) -> Expression {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
@@ -199,5 +213,33 @@ mod tests {
     fn test_3() {
         let s = Expression::from_str("(a + b) * c");
         assert_eq!(s.to_string(), "(* (+ a b) c)");
+    }
+
+    #[test]
+    fn test_4() {
+        let s = Expression::from_str("2 ^ 3 ^ 2");
+        let variables: HashMap<char, f32> = HashMap::new();
+        assert_eq!(s.eval(&variables), 512.0);
+    }
+
+    #[test]
+    fn precedence_power_over_multiply() {
+        let s = Expression::from_str("2 * 3 ^ 4");
+        assert_eq!(s.to_string(), "(* 2 (^ 3 4))");
+    }
+
+    #[test]
+    #[should_panic]
+    fn invalid_token_err_panic() {
+        let s = Expression::from_str("2 $ 5");
+        let variables: HashMap<char, f32> = HashMap::new();
+        s.eval(&variables);
+    }
+
+    #[test]
+    fn multy_digit_operations() {
+        let s = Expression::from_str("12 + 30");
+        let variables: HashMap<char, f32> = HashMap::new();
+        assert_eq!(s.eval(&variables), 42.0);
     }
 }
