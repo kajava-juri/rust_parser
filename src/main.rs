@@ -7,7 +7,7 @@ use std::io::Write;
 // https://www.youtube.com/watch?v=0c8b7YfsBKs
 
 fn main() {
-    let mut variables: HashMap<char, f32> = HashMap::new();
+    let mut variables: HashMap<String, f32> = HashMap::new();
     loop {
         print!(">> ");
         io::stdout().flush().unwrap();
@@ -17,7 +17,7 @@ fn main() {
             buf
         };
 
-        if input.trim() == "exit" {
+        if input.trim() == "exit" || input.trim() == "q" {
             break;
         }
 
@@ -29,6 +29,7 @@ fn main() {
         }
         let value = expr.eval(&variables);
         println!("Value: {}", value);
+        println!("Expression: {}", expr.to_string());
         //println!("{}", expr.to_string());
     }
 }

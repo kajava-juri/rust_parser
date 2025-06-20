@@ -3,9 +3,16 @@ use std::{collections::HashMap, fmt, vec};
 // Credit to Core Dumped YouTube channel
 // https://www.youtube.com/watch?v=0c8b7YfsBKs
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Lit {
+    Int(i64),
+    Float(f64),
+    Ident(String), // identifier (previously Atom was both a single digit or character) like foo123
+}
+
+#[derive(Clone, Debug, PartialEq)]
 enum Token {
-    Atom(char),
+    Literal(Lit),
     Op(char),
     Eof,
 }
@@ -16,27 +23,37 @@ struct Lexer {
 
 #[derive(Clone)]
 pub enum Expression {
-    Atom(char),
-    Operation(char, Vec<Expression>), // e.g., Operation('+', vec![Atom('a'), Atom('b')])
+    Atom(Lit),
+    Operation(char, Vec<Expression>), // e.g., Operation('+', vec![Atom('a'), Atom('b')]). TODOL support multi-character operators (e.g., '==', '!=', '&&', '||')
 }
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Assoc {
     Left,
-    Right
+    Right,
+}
+
+impl fmt::Display for Lit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Lit::Float(fl) => write!(f, "{}", fl),
+            Lit::Int(i) => write!(f, "{}", i),
+            Lit::Ident(ident) => write!(f, "{}", ident),
+        }
+    }
 }
 
 impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Expression::Atom(i) => write!(f, "{}", i),
+            Expression::Atom(lit) => write!(f, "{}", lit),
             Expression::Operation(head, tail) => {
-                write!(f, "({}", head)?;          // Write opening paren + operator
-                for s in tail {                   // Iterate through operands
-                    write!(f, " {}", s)?          // Write space + operand (recursive)
+                write!(f, "({}", head)?; // Write opening paren + operator
+                for s in tail {
+                    // Iterate through operands
+                    write!(f, " {}", s)? // Write space + operand (recursive)
                 }
-                write!(f, ")")                    // Write closing paren
+                write!(f, ")") // Write closing paren
             }
         }
     }
@@ -48,20 +65,14 @@ impl Expression {
         parse_expression(&mut lexer, 0)
     }
     #[allow(unused)]
-    pub fn is_asign(&self) -> Option<(char, &Expression)> {
+    pub fn is_asign(&self) -> Option<(String, &Expression)> {
         match self {
             Expression::Atom(_) => return None,
             Expression::Operation(c, operands) => {
                 if *c == '=' {
                     let var_name = match operands.first().unwrap() {
-                        Expression::Atom(c) => {
-                            if *c >= 'a' && *c <= 'z' || *c >= 'A' && *c <= 'Z' {
-                                *c
-                            } else {
-                                panic!("Invalid variable name: {}", c);
-                            }
-                        }
-                        _ => unreachable!("Expected variable name on left side of assignment")
+                        Expression::Atom(Lit::Ident(name)) => name.clone(),
+                        _ => unreachable!("Expected variable name on left side of assignment"),
                     };
                     return Some((var_name, operands.last().unwrap()));
                 }
@@ -70,18 +81,17 @@ impl Expression {
         }
     }
     #[allow(unused)]
-    pub fn eval(&self, variables: &HashMap<char, f32>) -> f32 {
+    pub fn eval(&self, variables: &HashMap<String, f32>) -> f32 {
         match self {
-            Expression::Atom(c) => {
-                match c {
-                    '0'..='9' => return c.to_digit(10).unwrap() as f32,
-                    'a'..='z' | 'A'..='Z' => {
-                        *variables.get(c).expect(&format!("Undefined variable: {}", c))
-                    },
-                    _ => unreachable!("Invalid atom: {}", c),
-                }
-            }
-            Expression::Operation(operator, operands) =>{
+            Expression::Atom(lit) => match lit {
+                Lit::Int(i) => return i.to_owned() as f32,
+                Lit::Float(f) => return f.to_owned() as f32,
+                Lit::Ident(var) => *variables
+                    .get(var)
+                    .expect(&format!("Undefined variable: {}", var)),
+                _ => unreachable!("Invalid atom: {:?}", lit),
+            },
+            Expression::Operation(operator, operands) => {
                 let lhs = operands.first().unwrap().eval(variables);
                 let rhs = operands.last().unwrap().eval(variables);
                 match operator {
@@ -90,7 +100,7 @@ impl Expression {
                     '*' => lhs * rhs,
                     '/' => lhs / rhs,
                     '^' => lhs.powf(rhs),
-                    '√' => lhs.powf(1.0/rhs),
+                    '√' => lhs.powf(1.0 / rhs),
                     op => panic!("Unknown operator: {}", operator),
                 }
             }
@@ -100,14 +110,58 @@ impl Expression {
 
 impl Lexer {
     fn new(input: &str) -> Lexer {
-        let mut tokens = input
+        let mut tokens = Vec::new();
+        let mut chars = input
             .chars()
             .filter(|c| !c.is_ascii_whitespace())
-            .map(|c| match c {
-                '0'..='9' | 'a'..='z' | 'A'..='Z' => Token::Atom(c),
-                _ => Token::Op(c),
-            })
-            .collect::<Vec<_>>();
+            .peekable();
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                // ========================================
+                // Is digit
+                // ========================================
+                c if c.is_ascii_digit() => {
+                    let mut buf = String::new();
+                    buf.push(c);
+
+                    // keep reading as long as its a digit
+                    // literalst cannot contain numbers first
+                    let mut is_float = false;
+                    while matches!(chars.peek(), Some(c) if c.is_ascii_digit() || *c == '.') {
+                        if c == '.' {is_float = true}
+                        buf.push(chars.next().unwrap());
+                    }
+
+                    // TODO: check for double dot
+                    let lit = if is_float {
+                        Lit::Float(buf.parse::<f64>().unwrap())
+                    } else {
+                        Lit::Int(buf.parse::<i64>().unwrap())
+                    };
+                    tokens.push(Token::Literal(lit));
+                }
+                // ========================================
+                // Is alphabetic
+                // ========================================
+                c if c.is_ascii_alphabetic() => {
+                    let mut buf = String::new();
+                    buf.push(c);
+                    while matches!(chars.peek(), Some(c) if c.is_ascii_alphanumeric() || *c == '_') {
+                        buf.push(chars.next().unwrap());
+                    }
+
+                    // Now we have a buffer of alphanumeric characters like 'foo123'
+                    let lit = Lit::Ident(buf);
+                    tokens.push(Token::Literal(lit));
+                },
+                // ========================================
+                // Is operator
+                // ========================================                
+                op => {tokens.push(Token::Op(op));},
+            }
+        }
+
         tokens.reverse(); // reverse to use pop() as next()
         Lexer { tokens }
     }
@@ -117,7 +171,7 @@ impl Lexer {
     }
 
     fn peek(&mut self) -> Token {
-        self.tokens.last().copied().unwrap_or(Token::Eof)
+        self.tokens.last().cloned().unwrap_or(Token::Eof)
     }
 }
 
@@ -133,35 +187,42 @@ fn infix_binding_power(op: char) -> (u8, u8) {
 
     match assoc {
         Assoc::Left => (prec, prec + 1),
-        Assoc::Right => (prec + 1, prec)
+        Assoc::Right => (prec + 1, prec),
     }
 }
 
 fn parse_expression(lexer: &mut Lexer, min_bp: u8) -> Expression {
     // First token must be an atom
     let mut lhs = match lexer.next() {
-        Token::Atom(c) => Expression::Atom(c),
+        Token::Literal(lit) => {
+            // Currently does not do much, but add this match for future extensibility
+            match lit {
+                Lit::Int(i) => Expression::Atom(Lit::Int(i)),
+                Lit::Float(f) => Expression::Atom(Lit::Float(f)),
+                Lit::Ident(ident) => Expression::Atom(Lit::Ident(ident)),
+            }
+        },
         Token::Op('(') => {
             // ensure that the function returned because it encountered a ')' not EOF
             let lhs = parse_expression(lexer, 0);
             assert_eq!(lexer.next(), Token::Op(')'));
             lhs
-        },
+        }
         t => panic!("Bad token: {:?}", t),
     };
 
     loop {
-        let op = match lexer.peek() {
+        let op: char = match lexer.peek() {
             Token::Eof => break,
             Token::Op(')') => break, // end of expression, finsh parsing
             Token::Op(op) => op,
             t => panic!("Bad token: {:?}", t),
         };
-        lexer.next();
         let (left_bp, right_bp) = infix_binding_power(op);
         if left_bp < min_bp {
             break;
         }
+        lexer.next();
         let rhs = parse_expression(lexer, right_bp);
         lhs = Expression::Operation(op, vec![lhs, rhs]);
     }
@@ -218,8 +279,14 @@ mod tests {
     #[test]
     fn test_4() {
         let s = Expression::from_str("2 ^ 3 ^ 2");
-        let variables: HashMap<char, f32> = HashMap::new();
+        let variables: HashMap<String, f32> = HashMap::new();
         assert_eq!(s.eval(&variables), 512.0);
+    }
+
+    #[test]
+    fn test_5() {
+        let s = Expression::from_str("(a + b) / c * b");
+        assert_eq!(s.to_string(), "(* (/ (+ a b) c) b)");
     }
 
     #[test]
@@ -232,14 +299,14 @@ mod tests {
     #[should_panic]
     fn invalid_token_err_panic() {
         let s = Expression::from_str("2 $ 5");
-        let variables: HashMap<char, f32> = HashMap::new();
+        let variables: HashMap<String, f32> = HashMap::new();
         s.eval(&variables);
     }
 
     #[test]
     fn multy_digit_operations() {
         let s = Expression::from_str("12 + 30");
-        let variables: HashMap<char, f32> = HashMap::new();
+        let variables: HashMap<String, f32> = HashMap::new();
         assert_eq!(s.eval(&variables), 42.0);
     }
 }
