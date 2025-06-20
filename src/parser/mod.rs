@@ -128,8 +128,13 @@ impl Lexer {
                     // keep reading as long as its a digit
                     // literalst cannot contain numbers first
                     let mut is_float = false;
-                    while matches!(chars.peek(), Some(c) if c.is_ascii_digit() || *c == '.') {
-                        if c == '.' {is_float = true}
+                    while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == '.') {
+                        if *chars.peek().unwrap() == '.' {
+                            if is_float {
+                                panic!("Invalid float literal: {}", buf);
+                            }
+                            is_float = true;
+                        }
                         buf.push(chars.next().unwrap());
                     }
 
@@ -144,7 +149,7 @@ impl Lexer {
                 // ========================================
                 // Is alphabetic
                 // ========================================
-                c if c.is_ascii_alphabetic() => {
+                c if (c.is_ascii_alphabetic() || c == '_') => {
                     let mut buf = String::new();
                     buf.push(c);
                     while matches!(chars.peek(), Some(c) if c.is_ascii_alphanumeric() || *c == '_') {
@@ -308,5 +313,27 @@ mod tests {
         let s = Expression::from_str("12 + 30");
         let variables: HashMap<String, f32> = HashMap::new();
         assert_eq!(s.eval(&variables), 42.0);
+    }
+
+    #[test]
+    fn floating_point_operations() {
+        let s = Expression::from_str("12.5 + 1");
+        let variables: HashMap<String, f32> = HashMap::new();
+        assert_eq!(s.eval(&variables), 13.5);
+    }
+
+    #[test]
+    #[should_panic]
+    fn floating_literal_with_double_dot_panics() {
+        let s = Expression::from_str("12.5.1 + 1");
+        let variables: HashMap<String, f32> = HashMap::new();
+        s.eval(&variables);
+    }
+
+    #[test]
+    fn variable_starts_with_underscore() {
+        let s = Expression::from_str("_var + 1");
+        let variables: HashMap<String, f32> = [("_var".to_string(), 10.0)].iter().cloned().collect();
+        assert_eq!(s.eval(&variables), 11.0);
     }
 }
