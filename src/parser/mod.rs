@@ -1,7 +1,12 @@
-use core::panic;
-use std::{collections::HashMap, fmt, vec};
+use std::{
+    collections::HashMap,
+    fmt::{self},
+    vec,
+};
 // Credit to Core Dumped YouTube channel
 // https://www.youtube.com/watch?v=0c8b7YfsBKs
+
+use crate::error_types::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Lit {
@@ -60,8 +65,16 @@ impl fmt::Display for Expression {
 }
 
 impl Expression {
-    pub fn from_str(input_str: &str) -> Expression {
-        let mut lexer = Lexer::new(input_str);
+    pub fn from_str(input_str: &str) -> Result<Expression, ParseError> {
+        let mut lexer = match Lexer::new(input_str) {
+            Ok(lexer) => lexer,
+            Err(e) => {
+                return Err(ParseError::UnexpectedToken(format!(
+                    "Failed to create lexer: {}",
+                    e
+                )))
+            }
+        };
         parse_expression(&mut lexer, 0)
     }
     #[allow(unused)]
@@ -81,27 +94,38 @@ impl Expression {
         }
     }
     #[allow(unused)]
-    pub fn eval(&self, variables: &HashMap<String, f32>) -> f32 {
+    pub fn eval(&self, variables: &HashMap<String, f32>) -> Result<f32, EvalError> {
         match self {
             Expression::Atom(lit) => match lit {
-                Lit::Int(i) => return i.to_owned() as f32,
-                Lit::Float(f) => return f.to_owned() as f32,
-                Lit::Ident(var) => *variables
-                    .get(var)
-                    .expect(&format!("Undefined variable: {}", var)),
-                _ => unreachable!("Invalid atom: {:?}", lit),
+                Lit::Int(i) => return Ok(i.to_owned() as f32),
+                Lit::Float(f) => return Ok(f.to_owned() as f32),
+                Lit::Ident(var) => match variables.get(var) {
+                    Some(value) => Ok(*value),
+                    None => Err(EvalError::UndefinedVariable(var.clone())),
+                },
+                _ => Err(EvalError::InvalidExpression(format!(
+                    "Invalid literal: {}",
+                    lit
+                ))),
             },
             Expression::Operation(operator, operands) => {
-                let lhs = operands.first().unwrap().eval(variables);
-                let rhs = operands.last().unwrap().eval(variables);
-                match operator {
-                    '+' => lhs + rhs,
-                    '-' => lhs - rhs,
-                    '*' => lhs * rhs,
-                    '/' => lhs / rhs,
-                    '^' => lhs.powf(rhs),
-                    '√' => lhs.powf(1.0 / rhs),
-                    op => panic!("Unknown operator: {}", operator),
+                match operands.first().unwrap().eval(variables) {
+                    Ok(lhs) => match operands.last().unwrap().eval(variables) {
+                        Ok(rhs) => match operator {
+                            '+' => Ok(lhs + rhs),
+                            '-' => Ok(lhs - rhs),
+                            '*' => Ok(lhs * rhs),
+                            '/' => Ok(lhs / rhs),
+                            '^' => Ok(lhs.powf(rhs)),
+                            '√' => Ok(rhs.powf(1.0 / (lhs))),
+                            op => Err(EvalError::InvalidExpression(format!(
+                                "Unknown operator: {}",
+                                operator
+                            ))),
+                        },
+                        Err(e) => Err(e),
+                    },
+                    Err(e) => Err(e),
                 }
             }
         }
@@ -109,7 +133,7 @@ impl Expression {
 }
 
 impl Lexer {
-    fn new(input: &str) -> Lexer {
+    fn new(input: &str) -> Result<Lexer, LexError> {
         let mut tokens = Vec::new();
         let mut chars = input
             .chars()
@@ -128,14 +152,26 @@ impl Lexer {
                     // keep reading as long as its a digit
                     // literalst cannot contain numbers first
                     let mut is_float = false;
-                    while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == '.') {
+                    while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == '.')
+                    {
                         if *chars.peek().unwrap() == '.' {
                             if is_float {
-                                panic!("Invalid float literal: {}", buf);
+                                return Err(LexError::InvalidFloat(format!(
+                                    "Invalid float literal: {}",
+                                    buf
+                                )));
                             }
                             is_float = true;
                         }
                         buf.push(chars.next().unwrap());
+                    }
+
+                    // edge-case: if floating literal ends with a dot
+                    if is_float && buf.ends_with('.') {
+                        return Err(LexError::InvalidFloat(format!(
+                            "Invalid float literal: {}",
+                            buf
+                        )));
                     }
 
                     // TODO: check for double dot
@@ -152,23 +188,26 @@ impl Lexer {
                 c if (c.is_ascii_alphabetic() || c == '_') => {
                     let mut buf = String::new();
                     buf.push(c);
-                    while matches!(chars.peek(), Some(c) if c.is_ascii_alphanumeric() || *c == '_') {
+                    while matches!(chars.peek(), Some(c) if c.is_ascii_alphanumeric() || *c == '_')
+                    {
                         buf.push(chars.next().unwrap());
                     }
 
                     // Now we have a buffer of alphanumeric characters like 'foo123'
                     let lit = Lit::Ident(buf);
                     tokens.push(Token::Literal(lit));
-                },
+                }
                 // ========================================
                 // Is operator
-                // ========================================                
-                op => {tokens.push(Token::Op(op));},
+                // ========================================
+                op => {
+                    tokens.push(Token::Op(op));
+                }
             }
         }
 
         tokens.reverse(); // reverse to use pop() as next()
-        Lexer { tokens }
+        Ok(Lexer { tokens })
     }
 
     fn next(&mut self) -> Token {
@@ -180,40 +219,42 @@ impl Lexer {
     }
 }
 
-fn infix_binding_power(op: char) -> (u8, u8) {
+fn infix_binding_power(op: char) -> Result<(u8, u8), LexError> {
     // get the precedence (order) and side association
     let (prec, assoc) = match op {
         '=' => (1, Assoc::Right),
         '+' | '-' => (2, Assoc::Left),
         '*' | '/' => (3, Assoc::Left),
-        '^' | '√' => (3, Assoc::Right),
-        _ => panic!("Unknown operator: {:?}", op),
+        '^' | '√' => (4, Assoc::Right),
+        _ => {
+            return Err(LexError::InvalidOperator(format!(
+                "Unknown operator: {:?}",
+                op
+            )))
+        }
     };
 
     match assoc {
-        Assoc::Left => (prec, prec + 1),
-        Assoc::Right => (prec + 1, prec),
+        Assoc::Left => Ok((prec, prec + 1)),
+        Assoc::Right => Ok((prec + 1, prec)),
     }
 }
 
-fn parse_expression(lexer: &mut Lexer, min_bp: u8) -> Expression {
+fn parse_expression(lexer: &mut Lexer, min_bp: u8) -> Result<Expression, ParseError> {
     // First token must be an atom
     let mut lhs = match lexer.next() {
-        Token::Literal(lit) => {
-            // Currently does not do much, but add this match for future extensibility
-            match lit {
-                Lit::Int(i) => Expression::Atom(Lit::Int(i)),
-                Lit::Float(f) => Expression::Atom(Lit::Float(f)),
-                Lit::Ident(ident) => Expression::Atom(Lit::Ident(ident)),
-            }
+        Token::Literal(lit) => match lit {
+            Lit::Int(_) => Expression::Atom(lit),
+            Lit::Float(_) => Expression::Atom(lit),
+            Lit::Ident(ident) => Expression::Atom(Lit::Ident(ident)),
         },
         Token::Op('(') => {
             // ensure that the function returned because it encountered a ')' not EOF
-            let lhs = parse_expression(lexer, 0);
+            let lhs = parse_expression(lexer, 0)?;
             assert_eq!(lexer.next(), Token::Op(')'));
             lhs
         }
-        t => panic!("Bad token: {:?}", t),
+        t => return Err(ParseError::UnexpectedToken(format!("Bad token: {:?}", t))),
     };
 
     loop {
@@ -221,17 +262,18 @@ fn parse_expression(lexer: &mut Lexer, min_bp: u8) -> Expression {
             Token::Eof => break,
             Token::Op(')') => break, // end of expression, finsh parsing
             Token::Op(op) => op,
-            t => panic!("Bad token: {:?}", t),
+            t => return Err(ParseError::UnexpectedToken(format!("Bad token: {:?}", t))),
         };
-        let (left_bp, right_bp) = infix_binding_power(op);
+        let (left_bp, right_bp) =
+            infix_binding_power(op).map_err(|e| ParseError::UnexpectedToken(e.to_string()))?;
         if left_bp < min_bp {
             break;
         }
         lexer.next();
-        let rhs = parse_expression(lexer, right_bp);
+        let rhs = parse_expression(lexer, right_bp)?;
         lhs = Expression::Operation(op, vec![lhs, rhs]);
     }
-    lhs
+    Ok(lhs)
 }
 
 // An example of simple parser that does not use precedence nor recursion
@@ -265,75 +307,98 @@ mod tests {
 
     #[test]
     fn test_1() {
-        let s = Expression::from_str("1");
+        let s = Expression::from_str("1").unwrap();
         assert_eq!(s.to_string(), "1");
     }
 
     #[test]
     fn test_2() {
-        let s = Expression::from_str("1 + 2 * 3");
+        let s = Expression::from_str("1 + 2 * 3").unwrap();
         assert_eq!(s.to_string(), "(+ 1 (* 2 3))");
     }
 
     #[test]
     fn test_3() {
-        let s = Expression::from_str("(a + b) * c");
+        let s = Expression::from_str("(a + b) * c").unwrap();
         assert_eq!(s.to_string(), "(* (+ a b) c)");
     }
 
     #[test]
     fn test_4() {
-        let s = Expression::from_str("2 ^ 3 ^ 2");
+        let s = Expression::from_str("2 ^ 3 ^ 2").unwrap();
         let variables: HashMap<String, f32> = HashMap::new();
-        assert_eq!(s.eval(&variables), 512.0);
+        assert_eq!(s.eval(&variables).unwrap(), 512.0);
     }
 
     #[test]
     fn test_5() {
-        let s = Expression::from_str("(a + b) / c * b");
+        let s = Expression::from_str("(a + b) / c * b").unwrap();
         assert_eq!(s.to_string(), "(* (/ (+ a b) c) b)");
     }
 
     #[test]
+    fn test_10() {
+        let s = Expression::from_str("a + 2 √ 4 * b").unwrap();
+        println!("{}", s.to_string());
+        assert_eq!(s.to_string(), "(+ a (* (√ 2 4) b))");
+    }
+
+    #[test]
     fn precedence_power_over_multiply() {
-        let s = Expression::from_str("2 * 3 ^ 4");
+        let s = Expression::from_str("2 * 3 ^ 4").unwrap();
         assert_eq!(s.to_string(), "(* 2 (^ 3 4))");
     }
 
     #[test]
-    #[should_panic]
     fn invalid_token_err_panic() {
         let s = Expression::from_str("2 $ 5");
-        let variables: HashMap<String, f32> = HashMap::new();
-        s.eval(&variables);
+        assert!(s.is_err());
     }
 
     #[test]
     fn multy_digit_operations() {
-        let s = Expression::from_str("12 + 30");
+        let s = Expression::from_str("12 + 30").unwrap();
         let variables: HashMap<String, f32> = HashMap::new();
-        assert_eq!(s.eval(&variables), 42.0);
+        assert_eq!(s.eval(&variables).unwrap(), 42.0);
     }
 
     #[test]
     fn floating_point_operations() {
-        let s = Expression::from_str("12.5 + 1");
+        let s = Expression::from_str("12.5 + 1").unwrap();
         let variables: HashMap<String, f32> = HashMap::new();
-        assert_eq!(s.eval(&variables), 13.5);
+        assert_eq!(s.eval(&variables).unwrap(), 13.5);
     }
 
     #[test]
-    #[should_panic]
     fn floating_literal_with_double_dot_panics() {
         let s = Expression::from_str("12.5.1 + 1");
+        assert!(s.is_err());
+    }
+
+    #[test]
+    fn invalid_digit_literal_single_dot() {
+        let s = Expression::from_str("12. + 1");
+        assert!(s.is_err());
+    }
+
+    #[test]
+    fn floating_literal_with_consecutive_dots_panics() {
+        let s = Expression::from_str("12..5 + 1");
+        assert!(s.is_err());
+    }
+
+    #[test]
+    fn exponent_inside_root_precedence() {
+        let s = Expression::from_str("4√(2 ^ 4)").unwrap();
         let variables: HashMap<String, f32> = HashMap::new();
-        s.eval(&variables);
+        assert_eq!(s.eval(&variables).unwrap(), 2.0);
     }
 
     #[test]
     fn variable_starts_with_underscore() {
-        let s = Expression::from_str("_var + 1");
-        let variables: HashMap<String, f32> = [("_var".to_string(), 10.0)].iter().cloned().collect();
-        assert_eq!(s.eval(&variables), 11.0);
+        let s = Expression::from_str("_var + 1").unwrap();
+        let variables: HashMap<String, f32> =
+            [("_var".to_string(), 10.0)].iter().cloned().collect();
+        assert_eq!(s.eval(&variables).unwrap(), 11.0);
     }
 }
