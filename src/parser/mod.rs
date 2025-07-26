@@ -3,7 +3,7 @@ use std::{
     fmt::{self},
     vec,
 };
-// Credit to Core Dumped YouTube channel
+// Credit to Core Dumped YouTube channel for giving the idea and a starting code to build on
 // https://www.youtube.com/watch?v=0c8b7YfsBKs
 
 use crate::error_types::*;
